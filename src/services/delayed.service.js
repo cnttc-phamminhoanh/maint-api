@@ -427,9 +427,9 @@ async function queryList(reason, page, pageSize) {
   const reasonCounts = REASONS.map((r) => ({ reason: r, count: 0 }));
   if (total > 0) {
     const rcRows = await query(
-    `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay d
-     WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
-     GROUP BY reason`,
+      `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay d
+      WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
+      GROUP BY reason`,
     );
     for (const rc of rcRows) {
       const item = reasonCounts.find((x) => x.reason === rc.reason);

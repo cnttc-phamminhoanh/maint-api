@@ -1,4 +1,4 @@
-const { query, inClause, inClauseSafe } = require('../db');
+const { query, inClauseSafe } = require('../db');
 const workshopService = require('./workshop.service');
 const {
   queryList,
@@ -332,7 +332,7 @@ async function getEquipmentStatistics(params) {
   const finalNoMatch = noMatch || dueNoMatch || statusNoMatch;
   const finalConditions = [...conditions];
   if (dueFilteredIds) {
-      const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
+    const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
     finalConditions.push(`id IN (${inSql})`);
     Object.assign(values, inParams);
   }
@@ -380,12 +380,6 @@ async function getEquipmentStatistics(params) {
   }
 
   const items = rows.map((row) => {
-    const device = {
-      startDate: row.use_date,
-      lastMaintenanceDate: row.max_mt_date,
-      maintenanceCycle: row.maintenance_type,
-      maintenanceStatus: row.maintenance_status,
-    };
     const nextDue = dueMap.get(row.equ_no) || null;
     const redInfo = redMap.get(row.equ_no) || null;
     const daysOverdue = redInfo
@@ -488,7 +482,7 @@ async function listCompletedToday(factory, page, pageSize) {
   // 2026-10-17: approver = l_code; Nguoi chiu trach nhiem = approver dau tien cua nhom
   const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
-  let empMap = new Map();
+  const empMap = new Map();
   if (empNos.size > 0) {
     const empRows = await query(
       `SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${[...empNos].map((_, i) => `@e${i}`).join(',')})`,
