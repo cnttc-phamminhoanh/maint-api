@@ -27,6 +27,14 @@ function hkDateStr(value) {
   return HK_DATE_FORMAT.format(d);
 }
 
+// 'YYYY-MM-DD' (gio VN) cua mot cot datetime; null neu khong co / khong hop le
+function businessDateOf(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return businessToday(d);
+}
+
 function fmtDate(value) {
   if (!value) return null;
   if (typeof value === 'string') return value.slice(0, 10);
@@ -112,6 +120,7 @@ module.exports = {
   TIME_ZONE,
   CYCLE_MONTHS,
   businessToday,
+  businessDateOf,
   fmtDate,
   toIso,
   hkDateStr,
