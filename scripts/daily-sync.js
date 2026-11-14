@@ -8,6 +8,17 @@ const { runSync } = require('../src/services/delayed.service');
 
 async function main() {
   await connectDb();
+  // 2026-11-02: duyet qua han 3 ngay -> tu dong xac nhan, chay TRUOC runSync
+  // de khong sinh episode awaiting 0 ngay roi dong ngay trong cung luot.
+  // Boc rieng: loi auto-approve (vd thieu dependency push) khong duoc lam
+  // chet job ghi lich su tre han.
+  try {
+    const { autoApproveStaleRequests } = require('../src/services/devices.service');
+    const auto = await autoApproveStaleRequests();
+    console.log('[daily-sync] auto-approve', JSON.stringify(auto));
+  } catch (err) {
+    console.error('[daily-sync] auto-approve fail:', err.message);
+  }
   const result = await runSync();
   console.log('[daily-sync] ok', JSON.stringify(result));
   await getPool().close();
