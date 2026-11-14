@@ -3,6 +3,7 @@ const Joi = require('joi');
 const { asyncHandler } = require('../errors');
 const { validate, getQuery } = require('../middleware/validate');
 const devicesService = require('../services/devices.service');
+const { listLocationGroups } = require('../constants/location-groups');
 
 const router = express.Router();
 
@@ -28,6 +29,7 @@ router.get(
       status: Joi.string().valid(...STATUSES).optional(),
       due: Joi.string().valid(...DUE_VALUES).optional(),
       cycle: Joi.string().valid(...CYCLES).optional(),
+      location: Joi.string().valid(...listLocationGroups()).allow('').optional(),
       page: pageSchema,
       pageSize: pageSizeSchema(100),
       scope: Joi.string().valid('mine', 'department', 'scanned').optional(),
@@ -51,6 +53,7 @@ router.get(
       status: Joi.string().valid(...STATUSES).optional(),
       due: Joi.string().valid(...DUE_VALUES).optional(),
       cycle: Joi.string().valid(...CYCLES).optional(),
+      location: Joi.string().valid(...listLocationGroups()).allow('').optional(),
       scope: Joi.string().valid('mine', 'department', 'scanned').optional(),
       approvalOnly: Joi.string().valid('1').optional(),
     }),
@@ -161,6 +164,15 @@ router.patch(
   }),
 );
 
+// 2026-11-02: chay tay tu dong duyet don qua han 3 ngay (cron 00:05 van chay)
+router.post(
+  '/auto-approve-stale',
+  validate(Joi.object({ userId: Joi.string().min(1).max(40).required() })),
+  asyncHandler(async (req, res) => {
+    res.json(await devicesService.autoApproveStaleRequests(req.body.userId));
+  }),
+);
+
 router.post(
   '/:id/submit-approval',
   deviceIdParam,
@@ -190,14 +202,14 @@ router.post(
   validate(
     Joi.object({
       userId: Joi.string().min(1).max(40).required(),
-      targetFactory: Joi.string().min(1).max(50).required(),
+      targetFactory: Joi.string().min(1).max(50).optional().allow('', null),
       newMaintainerId: Joi.string().allow(null, '').optional(),
     }),
   ),
   asyncHandler(async (req, res) => {
     res.json(
       await devicesService.transferFactory(req.params.id, {
-        targetFactory: req.body.targetFactory,
+        targetFactory: req.body.targetFactory || null,
         newMaintainerId: req.body.newMaintainerId || null,
       }, req.body.userId),
     );

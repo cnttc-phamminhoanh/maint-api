@@ -3,6 +3,11 @@ const { ApiError } = require('../errors');
 const workshopService = require('./workshop.service');
 const config = require('../config');
 const {
+  listLocationGroups,
+  normalizeLocationGroup,
+  locationGroupOf,
+} = require('../constants/location-groups');
+const {
   MAINTAINER_POSITIONS,
   isDeptManagerPosition,
   resolveUser,
@@ -10,6 +15,7 @@ const {
 } = require('../utils/auth');
 const {
   businessToday,
+  businessDateOf,
   fmtDate,
   toIso,
   addDays,
@@ -54,6 +60,8 @@ const EMPTY_COUNTS = {
     not_due: 0,
   },
   cycleCounts: { all: 0, '1_week': 0, '2_weeks': 0, '1_month': 0, '1_year': 0 },
+  locationCounts: { all: 0 },
+  locationGroups: [],
 };
 
 const STATUS_ENUM = ['needs_maintenance', 'in_maintenance', 'pending_approval', 'not_due'];
@@ -65,6 +73,12 @@ const DEPT_HOME_POSITIONS = ['nhan_vien_bao_tri', 'chu_quan', 'van_thu'];
 
 function touchSuffix() {
   return config.updatedAtCol ? `, ${config.updatedAtCol} = GETDATE()` : '';
+}
+
+// 2026-11-14: loc theo NHOM vi tri (GI/GA/GD = tap l_code LE...) - xem constants/location-groups.js
+function passLocationFilter(row, group) {
+  if (!group) return true;
+  return locationGroupOf(row.location) === normalizeLocationGroup(group);
 }
 
 // ==== Han truot chuyen (2026-10-23) ====
@@ -388,6 +402,7 @@ async function listDevices(params) {
       page: params.page,
       pageSize: params.pageSize,
       ...EMPTY_COUNTS,
+      locationGroups: listLocationGroups(),
     };
   }
   const where = built.cond.length > 0 ? `WHERE ${built.cond.join(' AND ')}` : '';
@@ -429,11 +444,20 @@ async function listDevices(params) {
     passStatusFilter(ctx, params.status) &&
     passCycleFilter(ctx.row, params.cycle) &&
     passDueFilter(ctx, params.due, today, tomorrow));
-  filtered.sort((a, b) => compareDeviceOrder(a, b, today));
 
-  const total = filtered.length;
+  // 2026-11-14 user chot: so luong tung vi tri theo tab thoi han dang chon
+  // (dem tren tap da loc status/cycle/due, KHONG phu thuoc vi tri dang chon)
+  const locationCounts = { all: filtered.length };
+  for (const ctx of filtered) {
+    const group = locationGroupOf(ctx.row.location);
+    if (group) locationCounts[group] = (locationCounts[group] || 0) + 1;
+  }
+  const located = filtered.filter((ctx) => passLocationFilter(ctx.row, params.location));
+  located.sort((a, b) => compareDeviceOrder(a, b, today));
+
+  const total = located.length;
   const offset = (params.page - 1) * params.pageSize;
-  const pageRows = filtered.slice(offset, offset + params.pageSize).map((ctx) => ctx.row);
+  const pageRows = located.slice(offset, offset + params.pageSize).map((ctx) => ctx.row);
   const items = await enrichRecords(pageRows, today, dueMap);
   return {
     items,
@@ -445,6 +469,8 @@ async function listDevices(params) {
     dueCounts,
     statusCounts,
     cycleCounts,
+    locationCounts,
+    locationGroups: listLocationGroups(),
   };
 }
 
@@ -468,7 +494,8 @@ async function listDeviceIds(params) {
   const filtered = decorateRows(rows, dueMap, redMap, today).filter((ctx) =>
     passStatusFilter(ctx, params.status) &&
     passCycleFilter(ctx.row, params.cycle) &&
-    passDueFilter(ctx, params.due, today, tomorrow));
+    passDueFilter(ctx, params.due, today, tomorrow) &&
+    passLocationFilter(ctx.row, params.location));
   filtered.sort((a, b) => compareDeviceOrder(a, b, today));
   return { ids: filtered.map((ctx) => String(ctx.row.id)), total: filtered.length };
 }
@@ -786,16 +813,19 @@ async function approveCompletion(id, userId) {
   }
   await withTransaction(async (tx) => {
     await finalizePendingOrder(tx, row, requester.emp_no, today);
-    // FIX #2: max_mt_date lay theo ngay kinh doanh GMT+7 (ban cu dung UTC)
+    // 2026-11-02 user chot: max_mt_date = NGAY GUI XET DUYET (ngay NV lam xong),
+    // khong phai ngay duyet -> duyet tre may ngay cung khong day lui han chu ky sau.
+    // FIX #2 giu lai: ngay kinh doanh GMT+7 (ban cu dung UTC)
+    const baseDate = businessDateOf(row.completion_requested_at) || today;
     await txQuery(
       tx,
       // Vong bao duong ket thuc: xoa temp de vong sau trach nhiem ve nguoi phu trach
-      `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @today,
+      `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @baseDate,
         completion_requested_at = NULL,
         pending_maintenance_items = NULL,
         temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
        WHERE id = @id`,
-      { today, id },
+      { baseDate, id },
     );
     // episode do dong tai thoi diem gui xet duyet (cong nhan NV da lam xong),
     // episode vang (cho duyet) dong tai thoi diem duyet. 2026-10-09
@@ -877,25 +907,24 @@ async function bulkApproveCompletion(ids, userId) {
   await withTransaction(async (tx) => {
     for (const row of rows) {
       await finalizePendingOrder(tx, row, requester.emp_no, today);
-    }
-    const { sql: upIn, params: upParams } = inClause(rows.map((r) => r.id), 'u');
-    await txQuery(
-      tx,
-      `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @today,
-        completion_requested_at = NULL,
-        pending_maintenance_items = NULL,
-        temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
-       WHERE id IN (${upIn})`,
-      { ...upParams, today },
-    );
-    for (const r of rows) {
+      // 2026-11-02 user chot: max_mt_date = ngay gui xet duyet tung thiet bi
+      const baseDate = businessDateOf(row.completion_requested_at) || today;
+      await txQuery(
+        tx,
+        `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @baseDate,
+          completion_requested_at = NULL,
+          pending_maintenance_items = NULL,
+          temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
+         WHERE id = @id`,
+        { baseDate, id: row.id },
+      );
       await txQuery(
         tx,
         `UPDATE eqm_mnt_delay
          SET resolved_at = CASE WHEN reason = 'awaiting_approval' THEN GETDATE()
                                 ELSE ISNULL(@reqAt, GETDATE()) END
          WHERE equ_no = @equNo AND resolved_at IS NULL`,
-        { equNo: r.equ_no, reqAt: r.completion_requested_at || null },
+        { equNo: row.equ_no, reqAt: row.completion_requested_at || null },
       );
     }
   });
@@ -949,6 +978,81 @@ async function bulkRejectCompletion(ids, userId, reason) {
     }
   }
   return { success: true, processed: updated.length };
+}
+
+// 2026-11-02 user chot: don gui xet duyet qua 3 ngay ma khong ai duyet =>
+// tu dong xac nhan hoan thanh, dung dung transaction cua duyet tay.
+// Episode tre han (ke ca awaiting_approval) chi dong resolved_at, KHONG xoa dong:
+// bang lich su tre han giu nguyen ly do "cho duyet" va so ngay tre.
+const AUTO_APPROVE_AFTER_DAYS = 3;
+
+async function autoApproveStaleRequests(userId) {
+  if (userId) {
+    const caller = await getCaller(userId);
+    if (caller.position !== 'admin') throw new ApiError(403, 'not allowed');
+  }
+  const today = businessToday();
+  const cutoff = addDays(today, -AUTO_APPROVE_AFTER_DAYS);
+  const rows = await query(
+    `SELECT ${DEVICE_SELECT} ${DEVICE_FROM}
+     WHERE d.maintenance_status = 'pending_approval'
+       AND d.completion_requested_at IS NOT NULL
+       AND CAST(d.completion_requested_at AS date) <= @cutoff
+     ORDER BY d.completion_requested_at ASC`,
+    { cutoff },
+  );
+  if (rows.length === 0) {
+    return { success: true, processed: 0, failed: 0, devices: [], errors: [] };
+  }
+
+  const firstApproverMap = await workshopService.getFirstApproverMap(
+    rows.map((r) => r.approver_emp_no).filter(Boolean),
+  );
+  const approved = [];
+  const failed = [];
+  for (const row of rows) {
+    try {
+      // check_user cua phieu = approver dau nhom l_code (nguoi de qua han)
+      const approverEmpNo = firstApproverMap.get(row.approver_emp_no) || '';
+      // max_mt_date = ngay gui xet duyet (khong phai ngay tu duyet)
+      const baseDate = businessDateOf(row.completion_requested_at) || today;
+      await withTransaction(async (tx) => {
+        await finalizePendingOrder(tx, row, approverEmpNo, today);
+        await txQuery(
+          tx,
+          `UPDATE eqm_mnt SET maintenance_status = 'not_due', max_mt_date = @baseDate,
+            completion_requested_at = NULL,
+            pending_maintenance_items = NULL,
+            temp_maintainer_emp_no = NULL, temp_maintainer_date = NULL${touchSuffix()}
+           WHERE id = @id`,
+          { baseDate, id: row.id },
+        );
+        // Dong episode theo dung luat cua duyet tay: do dong tai luc gui
+        // xet duyet, cho duyet dong tai luc xac nhan. Khong xoa dong nao.
+        await txQuery(
+          tx,
+          `UPDATE eqm_mnt_delay
+           SET resolved_at = CASE WHEN reason = 'awaiting_approval' THEN GETDATE()
+                                  ELSE ISNULL(@reqAt, GETDATE()) END
+           WHERE equ_no = @equNo AND resolved_at IS NULL`,
+          { equNo: row.equ_no, reqAt: row.completion_requested_at || null },
+        );
+      });
+      approved.push(row.equ_no);
+    } catch (err) {
+      failed.push({ equNo: row.equ_no, error: err.message });
+      console.error('[auto-approve]', row.equ_no, err.message);
+    }
+  }
+  // max_mt_date doi => lich han truot chuyen het han
+  if (approved.length > 0) dueSchedule.invalidateSchedule();
+  return {
+    success: true,
+    processed: approved.length,
+    failed: failed.length,
+    devices: approved,
+    errors: failed,
+  };
 }
 
 // ==== Chuyen phan xuong ====
@@ -1091,6 +1195,7 @@ module.exports = {
   rejectCompletion,
   bulkApproveCompletion,
   bulkRejectCompletion,
+  autoApproveStaleRequests,
   transferFactory,
   undoMaintenance,
 };
