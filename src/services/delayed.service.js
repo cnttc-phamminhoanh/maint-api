@@ -4,6 +4,7 @@ const dueSchedule = require('./due-schedule.service');
 const { SUSPENDED_EPISODE_SQL } = require('./delayed.constants');
 const workshopService = require('./workshop.service');
 const { assertAdmin, getCaller } = require('../utils/auth');
+const { displayNameSql, displayNamePartsSql } = require('../utils/display');
 const {
   businessToday,
   fmtDate,
@@ -446,7 +447,7 @@ async function queryList(reason, page, pageSize) {
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
              d.maintainer_emp_no, d.snapshot_at, d.occurred_at,
              d.resolved_at, d.responsible_emp_no, d.maintenance_type,
-             e.equ_name, e.max_mt_date, e.use_date,
+             ${displayNameSql('e')} AS equ_name, e.max_mt_date, e.use_date,
              e.maintenance_type AS e_maintenance_type
      FROM eqm_mnt_delay d
      LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
@@ -564,7 +565,8 @@ async function getDelayHistory(dept, page, pageSize) {
     `SELECT d.id, d.equ_no, d.reason, d.next_due_date, d.mnt_dept_no,
             d.responsible_emp_no, d.maintenance_type, d.occurred_at, d.resolved_at,
             d.snapshot_at,
-            d.equ_name, d.max_mt_date, e.use_date,
+            ${displayNamePartsSql('d.equ_name', 'e.equ_spec')} AS equ_name,
+            d.max_mt_date, e.use_date,
             d.maintenance_type AS e_maintenance_type
      FROM eqm_mnt_delay d
      LEFT JOIN eqm_mnt e ON e.equ_no = d.equ_no
