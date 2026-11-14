@@ -24,6 +24,7 @@ const {
   effectiveMaintainerEmpNo,
 } = require('../utils/dates');
 const { resolveSelectedTemplates, cycleToMtFlag } = require('./maintenance-order.service');
+const { displayNameSql } = require('../utils/display');
 const dueSchedule = require('./due-schedule.service');
 const pushService = require('../push/push.service');
 
@@ -33,7 +34,9 @@ const pushService = require('../push/push.service');
 // mot me som nhat; chuoi dung o ngay trong dau tien. => khong con tinh per-row trong SQL;
 // trang thai / loc / dem / sap xep lam trong JS tren han truot chuyen.
 
-const DEVICE_SELECT = `d.id, d.equ_no, d.equ_name, d.use_date, d.max_mt_date,
+// 2026-11-14: ten hien thi = equ_name (kem " model: equ_spec" khi co) — chi doi
+// hien thi, cot DB va tim kiem (d.equ_name LIKE) van dung ten goc.
+const DEVICE_SELECT = `d.id, d.equ_no, ${displayNameSql('d')} AS equ_name, d.use_date, d.max_mt_date,
   d.maintenance_type, d.maintenance_status, d.completion_requested_at, d.rejection_reason,
   d.maintainer_emp_no, d.approver AS approver_emp_no, d.temp_maintainer_emp_no, d.temp_maintainer_date,
   d.location, d.equ_type, d.equ_type_desc, d.mnt_dept_no, d.pending_maintenance_items,
@@ -88,6 +91,8 @@ function decorateRows(rows, dueMap, redMap, today) {
   return rows.map((row) => {
     const due = dueMap.get(row.equ_no) || null;
     // 2026-10-27: thiet bi con episode do mo = dang tre han (nam ngoai hang doi)
+    // 2026-11-14 user chot: giu thuan redMap (episode) — may moi qua han chi len
+    // chip «Tre han» sau khi cron daily-sync chay 00:05, khong tinh han live.
     const red = redMap.has(row.equ_no);
     const status = effectiveStatus(
       {

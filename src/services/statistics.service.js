@@ -1,4 +1,4 @@
-const { query, inClauseSafe } = require('../db');
+const { query, inClause, inClauseSafe } = require('../db');
 const workshopService = require('./workshop.service');
 const {
   queryList,
@@ -15,6 +15,7 @@ const {
   fmtDate,
 } = require('../utils/dates');
 const dueSchedule = require('./due-schedule.service');
+const { displayNameSql, displayNamePartsSql } = require('../utils/display');
 
 const ALL_STATUSES = [
   'needs_maintenance',
@@ -331,7 +332,7 @@ async function getEquipmentStatistics(params) {
   const finalNoMatch = noMatch || dueNoMatch || statusNoMatch;
   const finalConditions = [...conditions];
   if (dueFilteredIds) {
-    const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
+      const { sql: inSql, params: inParams } = inClauseSafe(dueFilteredIds, 'f');
     finalConditions.push(`id IN (${inSql})`);
     Object.assign(values, inParams);
   }
@@ -352,7 +353,7 @@ async function getEquipmentStatistics(params) {
   values.offset = (params.page - 1) * params.pageSize;
   values.pageSize = params.pageSize;
   const rows = await query(
-    `SELECT id, equ_no, equ_name, equ_type, equ_type_desc, location,
+    `SELECT id, equ_no, ${displayNamePartsSql('equ_name', 'equ_spec')} AS equ_name, equ_type, equ_type_desc, location,
       maintainer_emp_no, approver AS approver_emp_no, temp_maintainer_emp_no,
       maintenance_type, maintenance_status, use_date, max_mt_date, mnt_dept_no
      FROM eqm_mnt ${finalWhere}
@@ -379,6 +380,12 @@ async function getEquipmentStatistics(params) {
   }
 
   const items = rows.map((row) => {
+    const device = {
+      startDate: row.use_date,
+      lastMaintenanceDate: row.max_mt_date,
+      maintenanceCycle: row.maintenance_type,
+      maintenanceStatus: row.maintenance_status,
+    };
     const nextDue = dueMap.get(row.equ_no) || null;
     const redInfo = redMap.get(row.equ_no) || null;
     const daysOverdue = redInfo
@@ -460,7 +467,8 @@ async function listCompletedToday(factory, page, pageSize) {
   const offset = (page - 1) * pageSize;
   const rows = await query(
     `SELECT m.sheet_no, m.sheet_date, m.equ_no, m.emp_no, m.mt_flag,
-            d.equ_name, d.location, bc.base_name AS location_name, d.equ_type, d.equ_type_desc,
+            ${displayNameSql('d')} AS equ_name,
+            d.location, bc.base_name AS location_name, d.equ_type, d.equ_type_desc,
             d.maintainer_emp_no, d.approver AS approver_emp_no, d.temp_maintainer_emp_no,
             d.maintenance_type, d.max_mt_date, d.use_date
        FROM eqm_mt1 m
@@ -480,7 +488,7 @@ async function listCompletedToday(factory, page, pageSize) {
   // 2026-10-17: approver = l_code; Nguoi chiu trach nhiem = approver dau tien cua nhom
   const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
-  const empMap = new Map();
+  let empMap = new Map();
   if (empNos.size > 0) {
     const empRows = await query(
       `SELECT emp_no, emp_name FROM emp_mnt WHERE emp_no IN (${[...empNos].map((_, i) => `@e${i}`).join(',')})`,
