@@ -61,10 +61,14 @@ async function computeCurrentDelayed() {
   const lCodes = [...new Set(rows.map((r) => r.approver_emp_no).filter(Boolean))];
   const firstApproverMap = await workshopService.getFirstApproverMap(lCodes);
   const today = businessToday();
-  // 2026-10-27: han theo hang doi bo phan — thiet bi trong hang doi chi tre khi
-  // ngay lam viec cua lo da troi qua (settle < today); thiet bi da co episode do
-  // mo thi giu nguyen trong tap «dang tre» (redMap) de runSync cap nhat lien mach
-  const dueMap = await dueSchedule.getEffectiveDueMap();
+  // 2026-10-27 (chot lai): han tinh theo tung thiet bi (han goc truot ngay nghi);
+  // thiet bi da co episode do mo thi giu trong tap «dang tre» (redMap) de runSync
+  // cap nhat lien mach
+  // 2026-11-14 FIX: phai lay allMap (includePending) — map thuong BO pending nen thiet
+  // bi pending_approval co due = null → lenh `continue` ben duoi → runSync khong bao
+  // gio mo duoc episode awaiting (hong tu 10-27): user bao 91502929 gui xet duyet
+  // 09/11, qua an han tu 11/11 ma khong co dong «Tre han duyet» nao.
+  const dueMap = await dueSchedule.getEffectiveDueMap(true);
   const redMap = await dueSchedule.getRedDeviceMap();
   const current = new Map();
   for (const row of rows) {
@@ -124,15 +128,6 @@ async function computeCurrentDelayed() {
 //   chua co thi mo moi.
 // - thiet bi het tre han: dong moi episode con mo.
 async function runSync() {
-  // Chuyen doi luat hang doi (2026-10-27): dong mot lan cac episode do mo theo
-  // luat cu (occurred_at truoc QUEUE_RULE_START) de thiet bi xep hang lai tu hom
-  // nay thay vi tiep tuc do. Idempotent: cac lan chay sau khong con dong nao khop.
-  await query(
-    `UPDATE eqm_mnt_delay SET resolved_at = GETDATE()
-     WHERE resolved_at IS NULL AND reason <> 'awaiting_approval'
-       AND occurred_at < @ruleStart`,
-    { ruleStart: dueSchedule.QUEUE_RULE_START },
-  );
   dueSchedule.invalidateSchedule();
   const current = await computeCurrentDelayed();
   const openRows = await query(
@@ -431,7 +426,7 @@ async function queryList(reason, page, pageSize) {
   const reasonCounts = REASONS.map((r) => ({ reason: r, count: 0 }));
   if (total > 0) {
     const rcRows = await query(
-      `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay d
+    `SELECT reason, COUNT(*) AS cnt FROM eqm_mnt_delay d
      WHERE d.resolved_at IS NULL AND ${SUSPENDED_EPISODE_SQL}
      GROUP BY reason`,
     );
